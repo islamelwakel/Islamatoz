@@ -22,7 +22,7 @@ export default function App() {
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
 
   // State management
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>(getStoredTransactions);
   const [settings, setSettings] = useState<AppSettings>(getStoredSettings);
 
   // Filters State
@@ -49,10 +49,23 @@ export default function App() {
   // Toast notifications
   const [toastMessage, setToastMessage] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
-  // Load transactions on mount
+  // Listen to storage changes across tabs/windows
   useEffect(() => {
-    const loaded = getStoredTransactions();
-    setTransactions(loaded);
+    const handleStorageChange = (e: StorageEvent) => {
+      if ((e.key === 'finance_system_transactions_v2' || e.key === 'finance_system_transactions') && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setTransactions(parsed);
+          }
+        } catch (err) {
+          console.error('Failed to parse storage sync event:', err);
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   // Keyboard shortcut ('N' key) to open Add Transaction modal

@@ -1,6 +1,14 @@
 import { AppSettings, Transaction } from '../types';
 
-const TRANSACTIONS_KEY = 'finance_system_transactions_v2';
+const PRIMARY_KEY = 'finance_system_transactions_v2';
+const BACKUP_KEYS = [
+  'finance_system_transactions_v2',
+  'finance_system_transactions_v1',
+  'finance_system_transactions',
+  'transactions',
+  'finance_transactions',
+];
+
 const SETTINGS_KEY = 'finance_system_settings_v2';
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -65,12 +73,29 @@ const INITIAL_TRANSACTIONS: Transaction[] = [
 
 export function getStoredTransactions(): Transaction[] {
   try {
-    const raw = localStorage.getItem(TRANSACTIONS_KEY);
-    if (!raw) {
-      localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(INITIAL_TRANSACTIONS));
-      return INITIAL_TRANSACTIONS;
+    for (const key of BACKUP_KEYS) {
+      const raw = localStorage.getItem(key);
+      if (raw !== null) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            // Save to primary and fallback key to maintain migration
+            const serialized = JSON.stringify(parsed);
+            localStorage.setItem(PRIMARY_KEY, serialized);
+            localStorage.setItem('finance_system_transactions', serialized);
+            return parsed;
+          }
+        } catch {
+          // ignore JSON parse errors for corrupt keys
+        }
+      }
     }
-    return JSON.parse(raw);
+
+    // First time initializing app with demo data
+    const serializedInitial = JSON.stringify(INITIAL_TRANSACTIONS);
+    localStorage.setItem(PRIMARY_KEY, serializedInitial);
+    localStorage.setItem('finance_system_transactions', serializedInitial);
+    return INITIAL_TRANSACTIONS;
   } catch (err) {
     console.error('Failed to parse stored transactions:', err);
     return INITIAL_TRANSACTIONS;
@@ -79,7 +104,9 @@ export function getStoredTransactions(): Transaction[] {
 
 export function saveTransactions(transactions: Transaction[]): void {
   try {
-    localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(transactions));
+    const serialized = JSON.stringify(transactions);
+    localStorage.setItem(PRIMARY_KEY, serialized);
+    localStorage.setItem('finance_system_transactions', serialized);
   } catch (err) {
     console.error('Failed to save transactions:', err);
   }
