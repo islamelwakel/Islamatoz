@@ -1,0 +1,8 @@
+{
+  "name": "Remix نظام الحسابات المالية",
+  "description": "نظام بسيط ومريح لإدارة الوارد والصادر مع تصدير واستيراد إكسيل وإخفاء الرصيد والبحث بالتاريخ والاسم",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
