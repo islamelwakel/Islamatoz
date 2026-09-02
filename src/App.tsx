@@ -14,7 +14,84 @@ import { TransactionList } from './components/TransactionList';
 import { TransactionFormModal } from './components/TransactionFormModal';
 import { ExcelImportModal } from './components/ExcelImportModal';
 import { ToastContainer } from './components/Toast';
-import { ReceiptText, WalletCards, TrendingUp, TrendingDown, Layers, Search } from 'lucide-react';
+import { ReceiptText, WalletCards, TrendingUp, TrendingDown, Layers, Search, Plus, Settings2, Archive, RotateCcw, Trash2, Download, CalendarDays, Pencil, X, Check, AlertTriangle } from 'lucide-react';
+
+
+
+type PeriodTab = {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  status: 'active' | 'archived';
+  createdAt: number;
+  updatedAt: number;
+};
+
+const PERIOD_TABS_STORAGE_KEY = 'finance_system_period_tabs_v1';
+
+function generateStableId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch {}
+  return `period-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function readPeriodTabs(transactions: Transaction[]): PeriodTab[] {
+  try {
+    const raw = localStorage.getItem(PERIOD_TABS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item): item is PeriodTab =>
+          item && typeof item.id === 'string' && typeof item.name === 'string' &&
+          typeof item.startDate === 'string' && typeof item.endDate === 'string' &&
+          (item.status === 'active' || item.status === 'archived')
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Failed to read period tabs:', error);
+  }
+
+  const validDates = transactions.map((t) => t.date).filter(Boolean).sort();
+  const today = new Date().toISOString().slice(0, 10);
+  const startDate = validDates[0] || `${today.slice(0, 7)}-01`;
+  const lastTransactionDate = validDates[validDates.length - 1] || today;
+  const endDate = lastTransactionDate > today ? lastTransactionDate : today;
+  const monthLabel = new Intl.DateTimeFormat('ar-EG', { month: 'long', year: 'numeric' }).format(new Date(`${today}T00:00:00`));
+
+  const initialTab: PeriodTab = {
+    id: generateStableId(),
+    name: `حسابات ${monthLabel}`,
+    startDate,
+    endDate,
+    status: 'active',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  try { localStorage.setItem(PERIOD_TABS_STORAGE_KEY, JSON.stringify([initialTab])); } catch {}
+  return [initialTab];
+}
+
+function savePeriodTabsToStorage(tabs: PeriodTab[]): void {
+  try { localStorage.setItem(PERIOD_TABS_STORAGE_KEY, JSON.stringify(tabs)); } catch (error) {
+    console.error('Failed to save period tabs:', error);
+  }
+}
+
+function dateRangesOverlap(a: Pick<PeriodTab, 'startDate' | 'endDate'>, b: Pick<PeriodTab, 'startDate' | 'endDate'>): boolean {
+  return a.startDate <= b.endDate && b.startDate <= a.endDate;
+}
+
+function getPeriodTransactions(transactions: Transaction[], period: PeriodTab): Transaction[] {
+  return transactions
+    .filter((t) => t.date >= period.startDate && t.date <= period.endDate)
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.createdAt - a.createdAt);
+}
 
 export default function App() {
   // Navigation tab state ('transactions' or 'summary')
@@ -24,6 +101,15 @@ export default function App() {
   // State management
   const [transactions, setTransactions] = useState<Transaction[]>(getStoredTransactions);
   const [settings, setSettings] = useState<AppSettings>(getStoredSettings);
+
+  // Independent period tabs (presentation/organization layer only)
+  const [periodTabs, setPeriodTabs] = useState<PeriodTab[]>(() => readPeriodTabs(getStoredTransactions()));
+  const [activePeriodId, setActivePeriodId] = useState<string>('');
+  const [showArchivedPeriods, setShowArchivedPeriods] = useState(false);
+  const [periodModalMode, setPeriodModalMode] = useState<'create' | 'edit' | null>(null);
+  const [editingPeriod, setEditingPeriod] = useState<PeriodTab | null>(null);
+  const [periodDraft, setPeriodDraft] = useState({ name: '', startDate: '', endDate: '' });
+  const [isPeriodSaving, setIsPeriodSaving] = useState(false);
 
   // Filters State
   const [filters, setFilters] = useState<FilterOptions>({
@@ -67,6 +153,51 @@ export default function App() {
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
+
+
+  useEffect(() => {
+    const handlePeriodStorageChange = (e: StorageEvent) => {
+      if (e.key !== PERIOD_TABS_STORAGE_KEY || !e.newValue) return;
+      try {
+        const parsed = JSON.parse(e.newValue);
+        if (Array.isArray(parsed)) {
+          setPeriodTabs(parsed);
+          if (!parsed.some((p: PeriodTab) => p.id === activePeriodId)) {
+            setActivePeriodId(parsed.find((p: PeriodTab) => p.status === 'active')?.id || parsed[0]?.id || '');
+          }
+        }
+      } catch (err) {
+        console.error('Failed to parse period tabs storage sync event:', err);
+      }
+    };
+    window.addEventListener('storage', handlePeriodStorageChange);
+    return () => window.removeEventListener('storage', handlePeriodStorageChange);
+  }, [activePeriodId]);
+
+  useEffect(() => {
+    savePeriodTabsToStorage(periodTabs);
+    if (!periodTabs.some((p) => p.id === activePeriodId)) {
+      setActivePeriodId(periodTabs.find((p) => p.status === 'active')?.id || periodTabs[0]?.id || '');
+    }
+  }, [periodTabs]);
+
+  const activePeriod = useMemo(
+    () => periodTabs.find((p) => p.id === activePeriodId) || periodTabs.find((p) => p.status === 'active') || periodTabs[0] || null,
+    [periodTabs, activePeriodId]
+  );
+
+  const visiblePeriodTabs = useMemo(
+    () => periodTabs.filter((p) => p.status === (showArchivedPeriods ? 'archived' : 'active')),
+    [periodTabs, showArchivedPeriods]
+  );
+
+  useEffect(() => {
+    if (!activePeriod) return;
+    if (activePeriod.status === 'archived' && !showArchivedPeriods) {
+      const nextActive = periodTabs.find((p) => p.status === 'active');
+      if (nextActive) setActivePeriodId(nextActive.id);
+    }
+  }, [activePeriod, periodTabs, showArchivedPeriods]);
 
   // Keyboard shortcut ('N' key) to open Add Transaction modal
   useEffect(() => {
@@ -129,38 +260,23 @@ export default function App() {
     return Array.from(cats);
   }, [transactions]);
 
-  // Filter transactions according to search and date filters
+  // Filter transactions according to active period + search/date filters
   const filteredTransactions = useMemo(() => {
-    return transactions.filter((t) => {
-      // 1. Search by Name ("بحث بالاسم") or Details
+    const periodScoped = activePeriod ? getPeriodTransactions(transactions, activePeriod) : transactions;
+    return periodScoped.filter((t) => {
       if (filters.searchName.trim()) {
         const query = filters.searchName.toLowerCase().trim();
         const matchName = t.name.toLowerCase().includes(query);
         const matchDetails = (t.details || '').toLowerCase().includes(query);
         if (!matchName && !matchDetails) return false;
       }
-
-      // 2. Search by Date Range ("بحث بالتاريخ من تاريخ لتاريخ")
-      if (filters.startDate) {
-        if (t.date < filters.startDate) return false;
-      }
-      if (filters.endDate) {
-        if (t.date > filters.endDate) return false;
-      }
-
-      // 3. Filter by Transaction Type (وارد / صادر)
-      if (filters.type !== 'ALL' && t.type !== filters.type) {
-        return false;
-      }
-
-      // 4. Filter by Category
-      if (filters.category !== 'ALL' && t.category !== filters.category) {
-        return false;
-      }
-
+      if (filters.startDate && t.date < filters.startDate) return false;
+      if (filters.endDate && t.date > filters.endDate) return false;
+      if (filters.type !== 'ALL' && t.type !== filters.type) return false;
+      if (filters.category !== 'ALL' && t.category !== filters.category) return false;
       return true;
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.createdAt - a.createdAt);
-  }, [transactions, filters]);
+  }, [transactions, filters, activePeriod]);
 
   // Financial Stats calculation
   const stats: FinancialStats = useMemo(() => {
@@ -252,6 +368,142 @@ export default function App() {
     }
   };
 
+  // Period Tab management
+  const openCreatePeriodModal = () => {
+    const activeTabs = periodTabs.filter((p) => p.status === 'active');
+    const maxEnd = activeTabs.map((p) => p.endDate).sort().at(-1) || new Date().toISOString().slice(0, 10);
+    const nextDate = new Date(`${maxEnd}T00:00:00`);
+    nextDate.setDate(nextDate.getDate() + 1);
+    const nextISO = nextDate.toISOString().slice(0, 10);
+    const monthLabel = new Intl.DateTimeFormat('ar-EG', { month: 'long', year: 'numeric' }).format(nextDate);
+    setEditingPeriod(null);
+    setPeriodDraft({ name: `حسابات ${monthLabel}`, startDate: nextISO, endDate: nextISO });
+    setPeriodModalMode('create');
+  };
+
+  const openEditPeriodModal = (period: PeriodTab) => {
+    setEditingPeriod(period);
+    setPeriodDraft({ name: period.name, startDate: period.startDate, endDate: period.endDate });
+    setPeriodModalMode('edit');
+  };
+
+  const closePeriodModal = () => {
+    if (isPeriodSaving) return;
+    setPeriodModalMode(null);
+    setEditingPeriod(null);
+  };
+
+  const handleSavePeriod = () => {
+    const name = periodDraft.name.trim();
+    if (!name) {
+      showToast('اكتب اسم الـTab أولًا', 'error');
+      return;
+    }
+    if (!periodDraft.startDate || !periodDraft.endDate) {
+      showToast('حدد تاريخ البداية والنهاية', 'error');
+      return;
+    }
+    if (periodDraft.startDate > periodDraft.endDate) {
+      showToast('تاريخ البداية لا يمكن أن يكون بعد تاريخ النهاية', 'error');
+      return;
+    }
+
+    const candidate = { startDate: periodDraft.startDate, endDate: periodDraft.endDate };
+    const conflict = periodTabs.find((p) => p.id !== editingPeriod?.id && dateRangesOverlap(candidate, p));
+    if (conflict) {
+      showToast(`الفترة تتداخل مع «${conflict.name}»`, 'error');
+      return;
+    }
+
+    setIsPeriodSaving(true);
+    window.setTimeout(() => {
+      const now = Date.now();
+      if (periodModalMode === 'edit' && editingPeriod) {
+        const updated = periodTabs.map((p) => p.id === editingPeriod.id
+          ? { ...p, name, startDate: periodDraft.startDate, endDate: periodDraft.endDate, updatedAt: now }
+          : p
+        );
+        setPeriodTabs(updated);
+        setActivePeriodId(editingPeriod.id);
+        showToast('تم تحديث إعدادات الـTab بنجاح', 'success');
+      } else {
+        const newPeriod: PeriodTab = {
+          id: generateStableId(),
+          name,
+          startDate: periodDraft.startDate,
+          endDate: periodDraft.endDate,
+          status: 'active',
+          createdAt: now,
+          updatedAt: now,
+        };
+        setPeriodTabs((prev) => [...prev, newPeriod]);
+        setActivePeriodId(newPeriod.id);
+        setShowArchivedPeriods(false);
+        showToast('تم إنشاء الـTab بنجاح', 'success');
+      }
+      setIsPeriodSaving(false);
+      setPeriodModalMode(null);
+      setEditingPeriod(null);
+    }, 0);
+  };
+
+  const handleArchiveOrRestorePeriod = (period: PeriodTab) => {
+    const nextStatus: PeriodTab['status'] = period.status === 'active' ? 'archived' : 'active';
+    if (period.status === 'active' && !window.confirm(`نقل «${period.name}» إلى الأرشيف؟`)) return;
+    const now = Date.now();
+    setPeriodTabs((prev) => prev.map((p) => p.id === period.id ? { ...p, status: nextStatus, updatedAt: now } : p));
+    if (nextStatus === 'archived') {
+      const nextActive = periodTabs.find((p) => p.id !== period.id && p.status === 'active');
+      if (nextActive) setActivePeriodId(nextActive.id);
+      setShowArchivedPeriods(false);
+      showToast('تم نقل الـTab إلى الأرشيف', 'success');
+    } else {
+      setActivePeriodId(period.id);
+      setShowArchivedPeriods(false);
+      showToast('تم استعادة الـTab من الأرشيف', 'success');
+    }
+  };
+
+  const handlePermanentDeletePeriod = (period: PeriodTab) => {
+    const periodTx = getPeriodTransactions(transactions, period);
+    const confirmed = window.confirm(
+      `هل أنت متأكد من حذف «${period.name}» نهائيًا؟\n\nسيتم حذف ${periodTx.length} حركة داخل هذه الفترة ولا يمكن التراجع عن هذا الإجراء.`
+    );
+    if (!confirmed) return;
+
+    updateTransactions(transactions.filter((t) => !(t.date >= period.startDate && t.date <= period.endDate)));
+    const remaining = periodTabs.filter((p) => p.id !== period.id);
+    setPeriodTabs(remaining);
+    const fallback = remaining.find((p) => p.status === 'active') || remaining[0];
+    setActivePeriodId(fallback?.id || '');
+    showToast('تم حذف الـTab والبيانات المرتبطة به نهائيًا', 'info');
+  };
+
+  const handleExportPeriodExcel = (period: PeriodTab) => {
+    const items = getPeriodTransactions(transactions, period);
+    if (items.length === 0) {
+      showToast('لا توجد حركات داخل هذا الـTab لتصديرها', 'error');
+      return;
+    }
+    exportToExcel(items, `${period.name.replace(/[^\p{L}\p{N}\-_ ]/gu, '').trim() || 'الحسابات'}.xlsx`);
+    showToast(`تم تصدير ${items.length} حركة من «${period.name}»`, 'success');
+  };
+
+  const handleExportAllPeriods = () => {
+    if (periodTabs.length === 0) {
+      showToast('لا توجد Tabs لتصديرها', 'error');
+      return;
+    }
+    const allItems = periodTabs.flatMap((p) => getPeriodTransactions(transactions, p));
+    const unique = Array.from(new Map(allItems.map((t) => [t.id, t])).values());
+    if (unique.length === 0) {
+      showToast('لا توجد حركات لتصديرها', 'error');
+      return;
+    }
+    exportToExcel(unique, `كل_الفترات_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    showToast('تم تصدير جميع بيانات الفترات بنجاح', 'success');
+  };
+
   // Reset filters
   const handleResetFilters = () => {
     setFilters({
@@ -295,30 +547,114 @@ export default function App() {
       {/* Main App Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         
-        {/* TAB NAVIGATION BAR */}
+        {/* PERIOD TABS */}
+        <section className="mb-6">
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Layers className="w-5 h-5 text-emerald-500" />
+                <div>
+                  <h2 className="text-base font-black text-zinc-100">فترات الحسابات</h2>
+                  <p className="text-[11px] text-zinc-500">كل Tab له اسم ومدة مستقلة</p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={handleExportAllPeriods} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-zinc-900 border border-zinc-800 text-zinc-200 hover:bg-zinc-800 transition-all">
+                  <Download className="w-4 h-4" /> تصدير الكل
+                </button>
+                <button type="button" onClick={openCreatePeriodModal} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-500 transition-all shadow-sm">
+                  <Plus className="w-4 h-4" /> Tab جديد
+                </button>
+              </div>
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+              {visiblePeriodTabs.map((period) => {
+                const count = getPeriodTransactions(transactions, period).length;
+                const active = period.id === activePeriod?.id;
+                return (
+                  <button
+                    key={period.id}
+                    type="button"
+                    onClick={() => setActivePeriodId(period.id)}
+                    className={`min-w-[180px] text-right px-3.5 py-3 rounded-2xl border transition-all ${
+                      active
+                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-md'
+                        : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-black text-sm truncate">{period.name}</span>
+                      <span className={`text-[10px] px-2 py-1 rounded-full shrink-0 ${active ? 'bg-white/15 text-white' : 'bg-zinc-800 text-zinc-400'}`}>{count}</span>
+                    </div>
+                    <div className={`mt-1.5 flex items-center gap-1 text-[10px] ${active ? 'text-emerald-50' : 'text-zinc-500'}`}>
+                      <CalendarDays className="w-3 h-3" /> {period.startDate} → {period.endDate}
+                    </div>
+                  </button>
+                );
+              })}
+              {visiblePeriodTabs.length === 0 && (
+                <div className="w-full border border-dashed border-zinc-800 rounded-2xl p-5 text-center text-xs text-zinc-500">لا توجد Tabs في هذا القسم.</div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowArchivedPeriods(false)}
+                className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold border transition-all ${!showArchivedPeriods ? 'bg-zinc-100 text-zinc-900 border-zinc-100' : 'bg-zinc-900 text-zinc-400 border-zinc-800'}`}
+              >
+                <Layers className="w-3.5 h-3.5" /> النشطة ({periodTabs.filter((p) => p.status === 'active').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowArchivedPeriods(true)}
+                className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold border transition-all ${showArchivedPeriods ? 'bg-zinc-100 text-zinc-900 border-zinc-100' : 'bg-zinc-900 text-zinc-400 border-zinc-800'}`}
+              >
+                <Archive className="w-3.5 h-3.5" /> الأرشيف ({periodTabs.filter((p) => p.status === 'archived').length})
+              </button>
+            </div>
+
+            {activePeriod && (
+              <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    {activePeriod.status === 'archived' ? <Archive className="w-4 h-4 text-amber-400" /> : <Check className="w-4 h-4 text-emerald-400" />}
+                    <span className="text-sm font-black text-zinc-100 truncate">{activePeriod.name}</span>
+                    <span className="text-[10px] px-2 py-1 rounded-full bg-zinc-800 text-zinc-400">ID ثابت</span>
+                  </div>
+                  <div className="mt-1 text-[11px] text-zinc-500">{activePeriod.startDate} → {activePeriod.endDate}</div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={() => openEditPeriodModal(activePeriod)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-zinc-800 text-zinc-200 hover:bg-zinc-700 transition-all"><Pencil className="w-3.5 h-3.5" /> تعديل</button>
+                  <button type="button" onClick={() => handleExportPeriodExcel(activePeriod)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-zinc-800 text-zinc-200 hover:bg-zinc-700 transition-all"><Download className="w-3.5 h-3.5" /> Excel</button>
+                  {activePeriod.status === 'active' ? (
+                    <button type="button" onClick={() => handleArchiveOrRestorePeriod(activePeriod)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-amber-950/40 border border-amber-900/50 text-amber-300 hover:bg-amber-900/30 transition-all"><Archive className="w-3.5 h-3.5" /> أرشفة</button>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => handleArchiveOrRestorePeriod(activePeriod)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-950/50 border border-emerald-900/50 text-emerald-300 hover:bg-emerald-900/30 transition-all"><RotateCcw className="w-3.5 h-3.5" /> استعادة</button>
+                      <button type="button" onClick={() => handlePermanentDeletePeriod(activePeriod)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-rose-950/50 border border-rose-900/50 text-rose-300 hover:bg-rose-900/30 transition-all"><Trash2 className="w-3.5 h-3.5" /> حذف نهائي</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* SUMMARY NAVIGATION */}
         <div className="flex items-center gap-2 mb-6 border-b border-zinc-800 pb-3">
           <button
             onClick={() => setActiveTab('transactions')}
-            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all cursor-pointer ${
-              activeTab === 'transactions'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
-            }`}
+            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all cursor-pointer ${activeTab === 'transactions' ? 'bg-emerald-600 text-white shadow-md' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800'}`}
           >
             <ReceiptText className="w-4 h-4" />
             <span>سجل الحركات المالية</span>
-            <span className="px-2 py-0.5 rounded-full bg-zinc-950/60 text-xs font-bold font-mono border border-zinc-700/50">
-              {new Intl.NumberFormat('en-US').format(filteredTransactions.length)}
-            </span>
+            <span className="px-2 py-0.5 rounded-full bg-zinc-950/60 text-xs font-bold font-mono border border-zinc-700/50">{new Intl.NumberFormat('en-US').format(filteredTransactions.length)}</span>
           </button>
-
           <button
             onClick={() => setActiveTab('summary')}
-            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all cursor-pointer ${
-              activeTab === 'summary'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
-            }`}
+            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all cursor-pointer ${activeTab === 'summary' ? 'bg-emerald-600 text-white shadow-md' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800'}`}
           >
             <WalletCards className="w-4 h-4" />
             <span>ملخص الرصيد والمالية</span>
@@ -440,6 +776,45 @@ export default function App() {
         </div>
       </footer>
 
+      {/* Period Tab Modal */}
+      {periodModalMode && (
+        <div className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-zinc-950 border border-zinc-800 rounded-3xl shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+              <div>
+                <h3 className="font-black text-zinc-100">{periodModalMode === 'create' ? 'إنشاء Tab جديد' : 'تعديل الـTab'}</h3>
+                <p className="text-[11px] text-zinc-500 mt-1">الاسم والفترة منفصلان عن بيانات الحركات</p>
+              </div>
+              <button type="button" onClick={closePeriodModal} className="p-2 rounded-xl text-zinc-400 hover:bg-zinc-900 hover:text-white"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-xs font-bold text-zinc-400 block mb-2">اسم الـTab</label>
+                <input value={periodDraft.name} onChange={(e) => setPeriodDraft((d) => ({ ...d, name: e.target.value }))} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-3 text-sm text-white outline-none focus:border-emerald-600" placeholder="مثال: دفعات سبتمبر" autoFocus />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-zinc-400 block mb-2">من تاريخ</label>
+                  <input type="date" value={periodDraft.startDate} onChange={(e) => setPeriodDraft((d) => ({ ...d, startDate: e.target.value }))} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-3 text-sm text-white outline-none focus:border-emerald-600" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-zinc-400 block mb-2">إلى تاريخ</label>
+                  <input type="date" value={periodDraft.endDate} onChange={(e) => setPeriodDraft((d) => ({ ...d, endDate: e.target.value }))} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-3 text-sm text-white outline-none focus:border-emerald-600" />
+                </div>
+              </div>
+              <div className="flex gap-2 rounded-2xl bg-emerald-950/30 border border-emerald-900/40 p-3 text-[11px] text-emerald-200">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>لن يتم تغيير أو نقل أي حركة. الـTab يعتمد فقط على تاريخ الحركة في العرض.</span>
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-zinc-800 flex gap-2">
+              <button type="button" onClick={closePeriodModal} disabled={isPeriodSaving} className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold bg-zinc-900 border border-zinc-800 text-zinc-300">إلغاء</button>
+              <button type="button" onClick={handleSavePeriod} disabled={isPeriodSaving} className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold bg-emerald-600 text-white disabled:opacity-60">{isPeriodSaving ? 'جاري الحفظ...' : (periodModalMode === 'create' ? 'إنشاء Tab' : 'حفظ التعديل')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add / Edit Transaction Modal */}
       <TransactionFormModal
         isOpen={isAddModalOpen}
@@ -461,4 +836,5 @@ export default function App() {
     </div>
   );
 }
+Add period tabs management
 
