@@ -20,7 +20,7 @@ export const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
   const [type, setType] = useState<TransactionType>('IN');
   const [details, setDetails] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [category, setCategory] = useState('كاش');
+  const [category, setCategory] = useState('انستاباي');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -30,7 +30,7 @@ export const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
       setType(editingTransaction.type || 'IN');
       setDetails(editingTransaction.details || '');
       setDate(editingTransaction.date || new Date().toISOString().split('T')[0]);
-      setCategory(editingTransaction.category || 'كاش');
+      setCategory(editingTransaction.category || 'انستاباي');
     } else {
       // Default reset
       setName('');
@@ -38,7 +38,7 @@ export const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
       setType('IN');
       setDetails('');
       setDate(new Date().toISOString().split('T')[0]);
-      setCategory('كاش');
+      setCategory('انستاباي');
     }
     setError('');
   }, [editingTransaction, isOpen]);
@@ -66,7 +66,7 @@ export const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
         type: type,
         details: details.trim(),
         date: date,
-        category: category.trim() || 'كاش',
+        category: category.trim() || 'انستاباي',
       },
       editingTransaction?.id
     );
